@@ -80,6 +80,25 @@ impl Value {
                                 Command::Error("ECHO: wrong argument type".to_owned())
                             }
                         },
+                        "get" => {
+                            if let Value::String(name) = data.pop().unwrap() {
+                                Command::Get(name)
+                            } else {
+                                Command::Error("ECHO: wrong argument type".to_owned())
+                            }
+                        }
+                        "set" => {
+                            if data.len() != 3 {
+                                Command::Error(format!{"wrong number of arguments for set: {}", data.len()})
+                            } else {
+                                let value = data.pop().unwrap();
+                                if let Value::String(name) = data.pop().unwrap() {
+                                    Command::Set(name, value)
+                                } else {
+                                    Command::Error("ECHO: wrong argument type".to_owned())
+                                }
+                            }
+                        },
                         _ => Command::Error(format!("not implemented: {}", command)),
                     },
                     _ => Command::Error("wrong argument type".to_owned()),
@@ -100,16 +119,20 @@ enum Command {
     Error(String),
     Ping,
     Echo(String),
+    Get(String),
+    Set(String, Value),
 }
 
 struct Processor<R> where R: tokio::prelude::AsyncRead + tokio::prelude::AsyncBufRead + tokio::prelude::AsyncWrite + std::marker::Unpin {
     stream: R,
+    storage: std::collections::HashMap<String, Value>,
 }
 
 impl<R> Processor<R> where R: tokio::prelude::AsyncRead + tokio::prelude::AsyncBufRead + tokio::prelude::AsyncWrite + std::marker::Unpin {
     fn new(stream: R) -> Processor<R> {
         Processor{
             stream: stream,
+            storage: std::collections::HashMap::new(),
         }
     }
 
@@ -125,6 +148,26 @@ impl<R> Processor<R> where R: tokio::prelude::AsyncRead + tokio::prelude::AsyncB
             }
             Command::Echo(data) => {
                 let response = format!("+{}\r\n", data);
+
+                self.stream.write(response.as_bytes()).await?;
+                self.stream.flush().await?;
+            }
+            Command::Get(name) => {
+                if let Some(Value::String(value)) = self.storage.get(&name) {
+                    let response = format!("+{}\r\n", value);
+
+                    self.stream.write(response.as_bytes()).await?;
+                    self.stream.flush().await?;
+                } else {
+                    let response = "$-1\r\n";
+    
+                    self.stream.write(response.as_bytes()).await?;
+                    self.stream.flush().await?;
+                }
+            }
+            Command::Set(name, value) => {
+                self.storage.insert(name, value);
+                let response = "+OK\r\n";
 
                 self.stream.write(response.as_bytes()).await?;
                 self.stream.flush().await?;
