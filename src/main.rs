@@ -123,6 +123,12 @@ impl<R> Processor<R> where R: tokio::prelude::AsyncRead + tokio::prelude::AsyncB
                 self.stream.write(response.as_bytes()).await?;
                 self.stream.flush().await?;
             }
+            Command::Echo(data) => {
+                let response = format!("+{}\r\n", data);
+                
+                self.stream.write(response.as_bytes()).await?;
+                self.stream.flush().await?;
+            }
             _ => ()
         }
         Ok(())
