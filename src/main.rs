@@ -77,27 +77,27 @@ impl Value {
                             if let Value::String(data) = data.pop().unwrap() {
                                 Command::Echo(data)
                             } else {
-                                Command::Error
+                                Command::Error("ECHO: wrong argument type".to_owned())
                             }
                         },
-                        _ => Command::Error,
+                        _ => Command::Error(format!("not implemented: {}", command)),
                     },
-                    _ => Command::Error,
+                    _ => Command::Error("wrong argument type".to_owned()),
                 }
             },
             Value::String(data) => {
                 match data.to_lowercase().as_str() {
                     "ping" => Command::Ping,
-                    _ => Command::Error,
+                    _ => Command::Error(format!("not implemented: {}", data)),
                 }
             },
-            _ => Command::Error,
+            _ => Command::Error("wrong argument type".to_owned()),
         }
     }
 }
 
 enum Command {
-    Error,
+    Error(String),
     Ping,
     Echo(String),
 }
@@ -125,11 +125,13 @@ impl<R> Processor<R> where R: tokio::prelude::AsyncRead + tokio::prelude::AsyncB
             }
             Command::Echo(data) => {
                 let response = format!("+{}\r\n", data);
-                
+
                 self.stream.write(response.as_bytes()).await?;
                 self.stream.flush().await?;
             }
-            _ => ()
+            Command::Error(cause) => {
+                eprintln!("{}", cause);
+            }
         }
         Ok(())
     }
