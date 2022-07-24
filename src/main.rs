@@ -1,18 +1,25 @@
-#[allow(unused_imports)]
-use std::env;
-#[allow(unused_imports)]
-use std::fs;
-#[allow(unused_imports)]
+use std::io::prelude::*;
 use std::net::TcpListener;
+use std::net::TcpStream;
 
 fn main() {
-    // You can use print statements as follows for debugging, they'll be visible when running tests.
-    println!("Logs from your program will appear here!");
-
-    // Uncomment this block to pass the first stage
     let listener = TcpListener::bind("127.0.0.1:6379").unwrap();
-    match listener.accept() {
-        Ok((_socket, addr)) => println!("accepted new client: {:?}", addr),
-        Err(e) => println!("couldn't accept client: {:?}", e),
+
+    for stream in listener.incoming() {
+        let stream = stream.unwrap();
+
+        handle_connection(stream);
     }
 }
+
+fn handle_connection(mut stream: TcpStream) {
+    let mut buffer = [0; 1024];
+
+    stream.read(&mut buffer).unwrap();
+
+    let response = "+PONG\r\n";
+
+    stream.write(response.as_bytes()).unwrap();
+    stream.flush().unwrap();
+}
+
