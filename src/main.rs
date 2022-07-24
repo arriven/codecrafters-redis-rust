@@ -88,15 +88,33 @@ impl Value {
                             }
                         }
                         "set" => {
-                            if data.len() != 3 {
-                                Command::Error(format!{"wrong number of arguments for set: {}", data.len()})
-                            } else {
+                            if data.len() == 3 {
                                 let value = data.pop().unwrap();
                                 if let Value::String(name) = data.pop().unwrap() {
-                                    Command::Set(name, value)
+                                    Command::Set(name, value, None)
                                 } else {
                                     Command::Error("ECHO: wrong argument type".to_owned())
                                 }
+                            } else if data.len() == 5 {
+                                if let Value::Int(duration) = data.pop().unwrap() {
+                                    if let Value::String(flag) = data.pop().unwrap() {
+                                        assert!(flag.to_lowercase().as_str() == "px");
+                                        let value = data.pop().unwrap();
+                                        if let Value::String(name) = data.pop().unwrap() {
+                                            let expiry = std::time::Instant::now() + std::time::Duration::from_millis(duration as u64);
+                                            Command::Set(name, value, Some(expiry))
+                                        } else {
+                                            Command::Error("ECHO: wrong argument type".to_owned())
+                                        }
+                                    } else {
+                                        Command::Error("ECHO: wrong argument type".to_owned())
+                                    }
+
+                                } else {
+                                    Command::Error("ECHO: wrong argument type".to_owned())
+                                }
+                            } else {
+                                Command::Error(format!{"wrong number of arguments for set: {}", data.len()})
                             }
                         },
                         _ => Command::Error(format!("not implemented: {}", command)),
@@ -120,12 +138,17 @@ enum Command {
     Ping,
     Echo(String),
     Get(String),
-    Set(String, Value),
+    Set(String, Value, Option<std::time::Instant>),
+}
+
+struct StoredValue {
+    value: Value,
+    expiry: Option<std::time::Instant>,
 }
 
 struct Processor<R> where R: tokio::prelude::AsyncRead + tokio::prelude::AsyncBufRead + tokio::prelude::AsyncWrite + std::marker::Unpin {
     stream: R,
-    storage: std::collections::HashMap<String, Value>,
+    storage: std::collections::HashMap<String, StoredValue>,
 }
 
 impl<R> Processor<R> where R: tokio::prelude::AsyncRead + tokio::prelude::AsyncBufRead + tokio::prelude::AsyncWrite + std::marker::Unpin {
@@ -153,11 +176,27 @@ impl<R> Processor<R> where R: tokio::prelude::AsyncRead + tokio::prelude::AsyncB
                 self.stream.flush().await?;
             }
             Command::Get(name) => {
-                if let Some(Value::String(value)) = self.storage.get(&name) {
-                    let response = format!("+{}\r\n", value);
+                if let Some(StoredValue{value, expiry}) = self.storage.get(&name) {
+                    if let Value::String(value) = value {
+                        if let Some(expiry) = expiry {
+                            if *expiry < std::time::Instant::now() {
+                                let response = "$-1\r\n";
+                
+                                self.stream.write(response.as_bytes()).await?;
+                                self.stream.flush().await?;
+                                return Ok(())
+                            }
+                        }
+                        let response = format!("+{}\r\n", value);
 
-                    self.stream.write(response.as_bytes()).await?;
-                    self.stream.flush().await?;
+                        self.stream.write(response.as_bytes()).await?;
+                        self.stream.flush().await?;
+                    } else {
+                        let response = "$-1\r\n";
+        
+                        self.stream.write(response.as_bytes()).await?;
+                        self.stream.flush().await?;
+                    }
                 } else {
                     let response = "$-1\r\n";
     
@@ -165,8 +204,8 @@ impl<R> Processor<R> where R: tokio::prelude::AsyncRead + tokio::prelude::AsyncB
                     self.stream.flush().await?;
                 }
             }
-            Command::Set(name, value) => {
-                self.storage.insert(name, value);
+            Command::Set(name, value, expiry) => {
+                self.storage.insert(name, StoredValue{value: value, expiry: expiry});
                 let response = "+OK\r\n";
 
                 self.stream.write(response.as_bytes()).await?;
