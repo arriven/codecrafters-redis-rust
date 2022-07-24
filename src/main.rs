@@ -1,25 +1,33 @@
-use std::io::prelude::*;
-use std::net::TcpListener;
-use std::net::TcpStream;
+use std::io;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream};
+use tokio::stream::StreamExt;
 
-fn main() {
-    let listener = TcpListener::bind("127.0.0.1:6379").unwrap();
+#[tokio::main]
+async fn main() -> io::Result<()> {
+    let mut listener = TcpListener::bind("127.0.0.1:6379").await?;
 
-    for stream in listener.incoming() {
-        let stream = stream.unwrap();
+    let mut incoming = listener.incoming();
 
-        handle_connection(stream);
+    while let Some(stream) = incoming.next().await {
+        match stream {
+            Ok(stream) => {
+                tokio::spawn(handle_connection(stream));
+            }
+            Err(e) => { eprintln!("{:?}", e); }
+        }
     }
+    Ok(())
 }
 
-fn handle_connection(mut stream: TcpStream) {
+async fn handle_connection(mut stream: TcpStream) {
     let mut buffer = [0; 1024];
 
-    while let Ok(_) = stream.read(&mut buffer) {
+    while let Ok(_) = stream.read(&mut buffer).await {
         let response = "+PONG\r\n";
 
-        stream.write(response.as_bytes()).unwrap();
-        stream.flush().unwrap();
+        stream.write(response.as_bytes()).await.unwrap();
+        stream.flush().await.unwrap();
     }
 }
 
