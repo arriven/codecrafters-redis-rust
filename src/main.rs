@@ -159,8 +159,10 @@ impl<R> Processor<R> where R: tokio::prelude::AsyncRead + tokio::prelude::AsyncB
                     let size = size as usize;
                     let mut result = vec![0; size];
                     self.stream.read_exact(&mut result).await?;
+                    let result = result.iter().map(|b| *b as char).collect::<String>();
+                    eprintln!("read string {}", &result);
                     self.stream.read_until('\n' as u8, &mut buf).await?;
-                    Ok(Value::String(result.iter().map(|b| *b as char).collect::<String>()))
+                    Ok(Value::String(result))
                 } else {
                     Ok(Value::Nil)
                 }
