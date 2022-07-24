@@ -84,7 +84,7 @@ impl Value {
                             if let Value::String(name) = data.pop().unwrap() {
                                 Command::Get(name)
                             } else {
-                                Command::Error("ECHO: wrong argument type".to_owned())
+                                Command::Error("GET: wrong argument type".to_owned())
                             }
                         }
                         "set" => {
@@ -93,25 +93,29 @@ impl Value {
                                 if let Value::String(name) = data.pop().unwrap() {
                                     Command::Set(name, value, None)
                                 } else {
-                                    Command::Error("ECHO: wrong argument type".to_owned())
+                                    Command::Error("SET: wrong argument type".to_owned())
                                 }
                             } else if data.len() == 5 {
-                                if let Value::Int(duration) = data.pop().unwrap() {
-                                    if let Value::String(flag) = data.pop().unwrap() {
-                                        assert!(flag.to_lowercase().as_str() == "px");
-                                        let value = data.pop().unwrap();
-                                        if let Value::String(name) = data.pop().unwrap() {
-                                            let expiry = std::time::Instant::now() + std::time::Duration::from_millis(duration as u64);
-                                            Command::Set(name, value, Some(expiry))
-                                        } else {
-                                            Command::Error("ECHO: wrong argument type".to_owned())
-                                        }
-                                    } else {
-                                        Command::Error("ECHO: wrong argument type".to_owned())
-                                    }
-
+                                let duration = data.pop().unwrap();
+                                let duration = if let Value::Int(duration) = duration {
+                                    duration as u64
+                                } else if let Value::String(duration) = duration {
+                                    duration.parse::<u64>().unwrap()
                                 } else {
-                                    Command::Error("ECHO: wrong argument type".to_owned())
+                                    assert!(false);
+                                    0
+                                };
+                                if let Value::String(flag) = data.pop().unwrap() {
+                                    assert!(flag.to_lowercase().as_str() == "px");
+                                    let value = data.pop().unwrap();
+                                    if let Value::String(name) = data.pop().unwrap() {
+                                        let expiry = std::time::Instant::now() + std::time::Duration::from_millis(duration as u64);
+                                        Command::Set(name, value, Some(expiry))
+                                    } else {
+                                        Command::Error("SET: wrong argument type".to_owned())
+                                    }
+                                } else {
+                                    Command::Error("SET: wrong argument type".to_owned())
                                 }
                             } else {
                                 Command::Error(format!{"wrong number of arguments for set: {}", data.len()})
