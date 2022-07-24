@@ -139,6 +139,7 @@ impl<R> Processor<R> where R: tokio::prelude::AsyncRead + tokio::prelude::AsyncB
 
     async fn read_single(&mut self) -> io::Result<Value> {
         let b = self.stream.read_u8().await?;
+        eprintln!("{}", b as char);
         match b as char {
             '*' => {
                 let mut buf = vec![];
@@ -151,7 +152,9 @@ impl<R> Processor<R> where R: tokio::prelude::AsyncRead + tokio::prelude::AsyncB
                 let mut buf = vec![];
                 self.stream.read_until('\r' as u8, &mut buf).await?;
                 assert!(self.stream.read_u8().await? == '\n' as u8);
-                let size = buf.iter().map(|b| *b as char).collect::<String>().parse::<i64>().unwrap();
+                let text = buf.iter().map(|b| *b as char).collect::<String>();
+                eprintln!("{}", text);
+                let size = text.parse::<i64>().unwrap();
                 if size > 0 {
                     let size = size as usize;
                     let mut result = vec![0; size];
