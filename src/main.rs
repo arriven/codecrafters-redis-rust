@@ -71,9 +71,9 @@ impl Value {
             Value::Array(_, mut data) => {
                 assert!(data.len() > 0);
                 match &data[0] {
-                    Value::String(command) => match command.as_str() {
-                        "PING" => Command::Ping,
-                        "ECHO" => {
+                    Value::String(command) => match command.to_lowercase().as_str() {
+                        "ping" => Command::Ping,
+                        "echo" => {
                             if let Value::String(data) = data.pop().unwrap() {
                                 Command::Echo(data)
                             } else {
@@ -86,8 +86,8 @@ impl Value {
                 }
             },
             Value::String(data) => {
-                match data.as_str() {
-                    "PING" => Command::Ping,
+                match data.to_lowercase().as_str() {
+                    "ping" => Command::Ping,
                     _ => Command::Error,
                 }
             },
