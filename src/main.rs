@@ -143,8 +143,7 @@ impl<R> Processor<R> where R: tokio::prelude::AsyncRead + tokio::prelude::AsyncB
         match b as char {
             '*' => {
                 let mut buf = vec![];
-                self.stream.read_until('\r' as u8, &mut buf).await?;
-                assert!(self.stream.read_u8().await? == '\n' as u8);
+                self.stream.read_until('\n' as u8, &mut buf).await?;
                 let text = buf.iter().map(|b| *b as char).collect::<String>();
                 eprintln!("read size {:?}", buf);
                 let size = text.trim().parse::<usize>().unwrap();
@@ -152,8 +151,7 @@ impl<R> Processor<R> where R: tokio::prelude::AsyncRead + tokio::prelude::AsyncB
             }
             '$' => {
                 let mut buf = vec![];
-                self.stream.read_until('\r' as u8, &mut buf).await?;
-                assert!(self.stream.read_u8().await? == '\n' as u8);
+                self.stream.read_until('\n' as u8, &mut buf).await?;
                 let text = buf.iter().map(|b| *b as char).collect::<String>();
                 eprintln!("read size {:?}", buf);
                 let size = text.trim().parse::<i64>().unwrap();
@@ -161,6 +159,7 @@ impl<R> Processor<R> where R: tokio::prelude::AsyncRead + tokio::prelude::AsyncB
                     let size = size as usize;
                     let mut result = vec![0; size];
                     self.stream.read_exact(&mut result).await?;
+                    self.stream.read_until('\n' as u8, &mut buf).await?;
                     Ok(Value::String(result.iter().map(|b| *b as char).collect::<String>()))
                 } else {
                     Ok(Value::Nil)
@@ -168,8 +167,7 @@ impl<R> Processor<R> where R: tokio::prelude::AsyncRead + tokio::prelude::AsyncB
             }
             ':' => {
                 let mut buf = vec![];
-                self.stream.read_until('\r' as u8, &mut buf).await?;
-                assert!(self.stream.read_u8().await? == '\n' as u8);
+                self.stream.read_until('\n' as u8, &mut buf).await?;
                 let result = buf.iter().map(|b| *b as char).collect::<String>().trim().parse::<i64>().unwrap();
                 Ok(Value::Int(result))
             }
