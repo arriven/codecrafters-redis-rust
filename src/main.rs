@@ -147,7 +147,7 @@ impl<R> Processor<R> where R: tokio::prelude::AsyncRead + tokio::prelude::AsyncB
                 assert!(self.stream.read_u8().await? == '\n' as u8);
                 let text = buf.iter().map(|b| *b as char).collect::<String>();
                 eprintln!("read size {:?}", buf);
-                let size = text.parse::<usize>().unwrap();
+                let size = text.trim().parse::<usize>().unwrap();
                 Ok(Value::Array(size, Vec::with_capacity(size)))
             }
             '$' => {
@@ -156,7 +156,7 @@ impl<R> Processor<R> where R: tokio::prelude::AsyncRead + tokio::prelude::AsyncB
                 assert!(self.stream.read_u8().await? == '\n' as u8);
                 let text = buf.iter().map(|b| *b as char).collect::<String>();
                 eprintln!("read size {:?}", buf);
-                let size = text.parse::<i64>().unwrap();
+                let size = text.trim().parse::<i64>().unwrap();
                 if size > 0 {
                     let size = size as usize;
                     let mut result = vec![0; size];
@@ -170,7 +170,7 @@ impl<R> Processor<R> where R: tokio::prelude::AsyncRead + tokio::prelude::AsyncB
                 let mut buf = vec![];
                 self.stream.read_until('\r' as u8, &mut buf).await?;
                 assert!(self.stream.read_u8().await? == '\n' as u8);
-                let result = buf.iter().map(|b| *b as char).collect::<String>().parse::<i64>().unwrap();
+                let result = buf.iter().map(|b| *b as char).collect::<String>().trim().parse::<i64>().unwrap();
                 Ok(Value::Int(result))
             }
             _ => Ok(Value::Nil)
