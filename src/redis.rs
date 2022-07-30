@@ -236,6 +236,10 @@ impl<R> Server<R> where R: tokio::prelude::AsyncRead + tokio::prelude::AsyncBufR
                 let result = self.read_num::<i64>().await?;
                 Ok(Value::Int(result))
             }
+            '+' => {
+                let result = self.read_simple_string().await?;
+                Ok(Value::String(result))
+            }
             _ => Ok(Value::Nil)
         }
     }
@@ -254,6 +258,12 @@ impl<R> Server<R> where R: tokio::prelude::AsyncRead + tokio::prelude::AsyncBufR
         let mut buf = vec![];
         self.stream.read_until(b'\n', &mut buf).await?;
         Ok(result)
+    }
+
+    async fn read_simple_string(&mut self) -> io::Result<String> {
+        let mut buf = vec![];
+        self.stream.read_until(b'\n', &mut buf).await?;
+        Ok(buf.iter().map(|b| *b as char).collect::<String>().trim())
     }
 }
 
