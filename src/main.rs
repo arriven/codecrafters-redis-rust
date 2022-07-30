@@ -84,13 +84,16 @@ impl Command {
     }
 
     fn from_array(data: Vec<Value>) -> Command {
-        assert!(!data.is_empty());
+        if data.is_empty() {
+            return Command::Error("empty command".to_owned());
+        }
+
         match &data[0] {
             Value::String(command) => match command.to_lowercase().as_str() {
                 "ping" => Command::Ping,
                 "echo" => Command::echo(data),
                 "get" => Command::get(data),
-                "set" => Command::set(data),
+                "set" => Command::set(data, None),
                 _ => Command::Error(format!("not implemented: {}", command)),
             },
             _ => Command::Error("wrong argument type".to_owned()),
@@ -113,13 +116,19 @@ impl Command {
         }
     }
 
-    fn set(data: Vec<Value>) -> Command {
-        if data.len() == 3 {
-            Command::set_core(data, None)
-        } else if data.len() == 5 {
-            Command::set_with_flags(data)
+    fn set(mut data: Vec<Value>, expiry: Option<std::time::Instant>) -> Command {
+        if data.len() < 3 {
+            return Command::Error(format!{"not enough arguments for set: {}", data.len()})
+        }
+        if data.len() > 3 {
+            return Command::set_with_flags(data)
+        }
+
+        let value = data.pop().unwrap();
+        if let Value::String(name) = data.pop().unwrap() {
+            Command::Set(name, value, expiry)
         } else {
-            Command::Error(format!{"wrong number of arguments for set: {}", data.len()})
+            Command::Error("SET: wrong argument type".to_owned())
         }
     }
 
@@ -136,19 +145,10 @@ impl Command {
                         return Command::Error("SET: wrong argument type".to_owned());
                     };
                     let expiry = std::time::Instant::now() + std::time::Duration::from_millis(duration as u64);
-                    Command::set_core(data, Some(expiry))
+                    Command::set(data, Some(expiry))
                 },
                 _ => Command::Error(format!("SET: flag not implemented: {}", flag))
             }
-        } else {
-            Command::Error("SET: wrong argument type".to_owned())
-        }
-    }
-
-    fn set_core(mut data: Vec<Value>, expiry: Option<std::time::Instant>) -> Command {
-        let value = data.pop().unwrap();
-        if let Value::String(name) = data.pop().unwrap() {
-            Command::Set(name, value, expiry)
         } else {
             Command::Error("SET: wrong argument type".to_owned())
         }
