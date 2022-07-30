@@ -166,6 +166,15 @@ pub struct StoredValue {
     expiry: Option<std::time::Instant>,
 }
 
+impl StoredValue {
+    fn expired(&self) -> bool {
+        if let Some(expiry) = self.expiry {
+            return expiry < std::time::Instant::now();
+        }
+        false
+    }
+}
+
 pub struct Server {
     storage: Storage,
 }
@@ -193,12 +202,7 @@ impl Server {
 
     async fn gc(storage: Storage) {
         loop {
-            storage.lock().await.retain(|_, ref mut v| {
-                if let Some(expiry) = v.expiry {
-                    return expiry >= std::time::Instant::now();
-                }
-                true
-            });
+            storage.lock().await.retain(|_, ref mut v| !v.expired());
         }
     }
 }
@@ -233,13 +237,11 @@ impl<R> Worker<R> where R: tokio::prelude::AsyncRead + tokio::prelude::AsyncBufR
     }
 
     async fn get_value(&self, name: &str) -> Value {
-        if let Some(StoredValue{value, expiry}) = self.storage.lock().await.get(name) {
-            if let Some(expiry) = expiry {
-                if *expiry < std::time::Instant::now() {
-                    return Value::Nil;
-                }
+        if let Some(value) = self.storage.lock().await.get(name) {
+            if value.expired() {
+                return Value::Nil;
             }
-            return value.clone()
+            return value.value.clone()
         }
         Value::Nil
     }
