@@ -23,13 +23,9 @@ async fn main() -> io::Result<()> {
 async fn handle_connection(stream: TcpStream) -> io::Result<()> {
     let stream = tokio::io::BufStream::new(stream);
     let mut processor = Processor::new(stream);
-    while let Ok(()) = processor.process_message().await {
-        // let response = "+PONG\r\n";
-
-        // stream.write(response.as_bytes()).await.unwrap();
-        // stream.flush().await.unwrap();
+    loop {
+        processor.process_message().await?;
     }
-    Ok(())
 }
 
 enum Value {
@@ -43,7 +39,7 @@ impl Value {
     fn is_complete(&self) -> bool {
         match &self {
             Value::Array(size, data) => if *size == data.len() {
-                data.iter().all(|val| val.is_complete())
+                data.iter().all(Value::is_complete)
             } else {
                 false
             }
@@ -62,14 +58,14 @@ impl Value {
                 data.push(val);
             }
         } else {
-            assert!(false); // if should always pass
+            panic!("only array types can be used appended with a value");
         }
     }
 
-    fn to_command(self) -> Command {
+    fn into_command(self) -> Command {
         match self {
             Value::Array(_, mut data) => {
-                assert!(data.len() > 0);
+                assert!(!data.is_empty());
                 match &data[0] {
                     Value::String(command) => match command.to_lowercase().as_str() {
                         "ping" => Command::Ping,
@@ -102,8 +98,7 @@ impl Value {
                                 } else if let Value::String(duration) = duration {
                                     duration.parse::<u64>().unwrap()
                                 } else {
-                                    assert!(false);
-                                    0
+                                    return Command::Error("SET: wrong argument type".to_owned());
                                 };
                                 if let Value::String(flag) = data.pop().unwrap() {
                                     assert!(flag.to_lowercase().as_str() == "px");
@@ -158,67 +153,46 @@ struct Processor<R> where R: tokio::prelude::AsyncRead + tokio::prelude::AsyncBu
 impl<R> Processor<R> where R: tokio::prelude::AsyncRead + tokio::prelude::AsyncBufRead + tokio::prelude::AsyncWrite + std::marker::Unpin {
     fn new(stream: R) -> Processor<R> {
         Processor{
-            stream: stream,
+            stream,
             storage: std::collections::HashMap::new(),
         }
     }
 
     async fn process_message(&mut self)-> io::Result<()> {
         let message = self.read_message().await?;
-        let command = message.to_command();
+        let command = message.into_command();
         match command {
             Command::Ping => {
-                let response = "+PONG\r\n";
-
-                self.stream.write(response.as_bytes()).await?;
-                self.stream.flush().await?;
+                self.send_response("+PONG\r\n").await?;
             }
             Command::Echo(data) => {
-                let response = format!("+{}\r\n", data);
-
-                self.stream.write(response.as_bytes()).await?;
-                self.stream.flush().await?;
+                self.send_response(&format!("+{}\r\n", data)).await?;
             }
             Command::Get(name) => {
-                if let Some(StoredValue{value, expiry}) = self.storage.get(&name) {
-                    if let Value::String(value) = value {
-                        if let Some(expiry) = expiry {
-                            if *expiry < std::time::Instant::now() {
-                                let response = "$-1\r\n";
-                
-                                self.stream.write(response.as_bytes()).await?;
-                                self.stream.flush().await?;
-                                return Ok(())
-                            }
+                if let Some(StoredValue{value: Value::String(value), expiry}) = self.storage.get(&name) {
+                    if let Some(expiry) = expiry {
+                        if *expiry < std::time::Instant::now() {
+                            return self.send_response("$-1\r\n").await;
                         }
-                        let response = format!("+{}\r\n", value);
-
-                        self.stream.write(response.as_bytes()).await?;
-                        self.stream.flush().await?;
-                    } else {
-                        let response = "$-1\r\n";
-        
-                        self.stream.write(response.as_bytes()).await?;
-                        self.stream.flush().await?;
                     }
-                } else {
-                    let response = "$-1\r\n";
-    
-                    self.stream.write(response.as_bytes()).await?;
-                    self.stream.flush().await?;
+                    return self.send_response(&format!("+{}\r\n", value)).await;
                 }
+                self.send_response("$-1\r\n").await?;
             }
             Command::Set(name, value, expiry) => {
-                self.storage.insert(name, StoredValue{value: value, expiry: expiry});
-                let response = "+OK\r\n";
-
-                self.stream.write(response.as_bytes()).await?;
-                self.stream.flush().await?;
+                self.storage.insert(name, StoredValue{value, expiry});
+                self.send_response("+OK\r\n").await?;
             }
             Command::Error(cause) => {
                 eprintln!("{}", cause);
             }
         }
+        Ok(())
+    }
+
+    async fn send_response(&mut self, response: &str) -> io::Result<()> {
+        self.stream.write_all(response.as_bytes()).await?;
+        self.stream.flush().await?;
         Ok(())
     }
 
@@ -233,29 +207,25 @@ impl<R> Processor<R> where R: tokio::prelude::AsyncRead + tokio::prelude::AsyncB
 
     async fn read_single(&mut self) -> io::Result<Value> {
         let b = self.stream.read_u8().await?;
-        eprintln!("{}", b as char);
         match b as char {
             '*' => {
                 let mut buf = vec![];
-                self.stream.read_until('\n' as u8, &mut buf).await?;
+                self.stream.read_until(b'\n', &mut buf).await?;
                 let text = buf.iter().map(|b| *b as char).collect::<String>();
-                eprintln!("read size {:?}", buf);
                 let size = text.trim().parse::<usize>().unwrap();
                 Ok(Value::Array(size, Vec::with_capacity(size)))
             }
             '$' => {
                 let mut buf = vec![];
-                self.stream.read_until('\n' as u8, &mut buf).await?;
+                self.stream.read_until(b'\n', &mut buf).await?;
                 let text = buf.iter().map(|b| *b as char).collect::<String>();
-                eprintln!("read size {:?}", buf);
                 let size = text.trim().parse::<i64>().unwrap();
                 if size > 0 {
                     let size = size as usize;
                     let mut result = vec![0; size];
                     self.stream.read_exact(&mut result).await?;
                     let result = result.iter().map(|b| *b as char).collect::<String>();
-                    eprintln!("read string {}", &result);
-                    self.stream.read_until('\n' as u8, &mut buf).await?;
+                    self.stream.read_until(b'\n', &mut buf).await?;
                     Ok(Value::String(result))
                 } else {
                     Ok(Value::Nil)
@@ -263,7 +233,7 @@ impl<R> Processor<R> where R: tokio::prelude::AsyncRead + tokio::prelude::AsyncB
             }
             ':' => {
                 let mut buf = vec![];
-                self.stream.read_until('\n' as u8, &mut buf).await?;
+                self.stream.read_until(b'\n', &mut buf).await?;
                 let result = buf.iter().map(|b| *b as char).collect::<String>().trim().parse::<i64>().unwrap();
                 Ok(Value::Int(result))
             }
