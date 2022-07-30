@@ -175,7 +175,8 @@ impl<R> Processor<R> where R: tokio::prelude::AsyncRead + tokio::prelude::AsyncB
                             return self.send_response("$-1\r\n").await;
                         }
                     }
-                    return self.send_response(&format!("+{}\r\n", value)).await;
+                    let response = format!("+{}\r\n", value);
+                    return self.send_response(&response).await;
                 }
                 self.send_response("$-1\r\n").await?;
             }
