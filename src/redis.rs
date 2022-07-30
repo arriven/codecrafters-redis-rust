@@ -1,5 +1,7 @@
 use std::io;
 use std::convert::TryInto;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, AsyncBufReadExt};
 
 #[derive(Debug)]
@@ -21,6 +23,7 @@ impl From<std::num::TryFromIntError> for Error {
     }
 }
 
+#[derive(Clone)]
 enum Value {
     Nil,
     Int(i64),
@@ -158,47 +161,69 @@ impl Command {
     }
 }
 
-struct StoredValue {
+pub struct StoredValue {
     value: Value,
     expiry: Option<std::time::Instant>,
 }
 
-pub struct Server<R> where R: tokio::prelude::AsyncRead + tokio::prelude::AsyncBufRead + tokio::prelude::AsyncWrite + std::marker::Unpin {
-    stream: R,
-    storage: std::collections::HashMap<String, StoredValue>,
+pub struct Server {
+    storage: Storage,
 }
 
-impl<R> Server<R> where R: tokio::prelude::AsyncRead + tokio::prelude::AsyncBufRead + tokio::prelude::AsyncWrite + std::marker::Unpin {
-    pub fn new(stream: R) -> Server<R> {
+impl Server {
+    pub fn new() -> Server {
         Server{
-            stream,
-            storage: std::collections::HashMap::new(),
+            storage: Arc::new(Mutex::new(std::collections::HashMap::new())),
         }
     }
 
-    pub async fn process_message(&mut self)-> Result<(), Error> {
+    pub fn worker<R>(&self, stream: R) -> Worker<R> where R: tokio::prelude::AsyncRead + tokio::prelude::AsyncBufRead + tokio::prelude::AsyncWrite + std::marker::Unpin {
+        Worker{
+            stream,
+            storage: self.storage.clone(),
+        }
+    }
+}
+
+type Storage = Arc<Mutex<std::collections::HashMap<String, StoredValue>>>;
+
+pub struct Worker<R> where R: tokio::prelude::AsyncRead + tokio::prelude::AsyncBufRead + tokio::prelude::AsyncWrite + std::marker::Unpin {
+    stream: R,
+    storage: Storage,
+}
+
+impl<R> Worker<R> where R: tokio::prelude::AsyncRead + tokio::prelude::AsyncBufRead + tokio::prelude::AsyncWrite + std::marker::Unpin {
+    pub async fn run(mut self) -> Result<(), Error> {
+        loop {
+            self.process_message().await?;
+        }
+    }
+
+    pub async fn process_message(&mut self) -> Result<(), Error> {
         let message = self.read_message().await?;
         let command = Command::from_value(message)?;
-        match command {
-            Command::Ping => self.send_response(&Value::String("PONG".to_string()).to_string()).await,
-            Command::Echo(data) => self.send_response(&Value::String(data).to_string()).await,
-            Command::Get(name) => {
-                if let Some(StoredValue{value, expiry}) = self.storage.get(&name) {
-                    if let Some(expiry) = expiry {
-                        if *expiry < std::time::Instant::now() {
-                            return self.send_response(&Value::Nil.to_string()).await;
-                        }
-                    }
-                    let response = value.to_string();
-                    return self.send_response(&response).await;
-                }
-                self.send_response(&Value::Nil.to_string()).await
-            }
+        let response = match command {
+            Command::Ping => Value::String("PONG".to_string()),
+            Command::Echo(data) => Value::String(data),
+            Command::Get(name) => self.get_value(&name).await,
             Command::Set(name, value, expiry) => {
-                self.storage.insert(name, StoredValue{value, expiry});
-                self.send_response(&Value::String("OK".to_string()).to_string()).await
+                self.storage.lock().await.insert(name, StoredValue{value, expiry});
+                Value::String("OK".to_string())
             }
+        }.to_string();
+        self.send_response(&response).await
+    }
+
+    async fn get_value(&self, name: &str) -> Value {
+        if let Some(StoredValue{value, expiry}) = self.storage.lock().await.get(name) {
+            if let Some(expiry) = expiry {
+                if *expiry < std::time::Instant::now() {
+                    return Value::Nil;
+                }
+            }
+            return value.clone()
         }
+        Value::Nil
     }
 
     async fn send_response(&mut self, response: &str) -> Result<(), Error> {
@@ -263,7 +288,7 @@ impl<R> Server<R> where R: tokio::prelude::AsyncRead + tokio::prelude::AsyncBufR
     async fn read_simple_string(&mut self) -> io::Result<String> {
         let mut buf = vec![];
         self.stream.read_until(b'\n', &mut buf).await?;
-        Ok(buf.iter().map(|b| *b as char).collect::<String>().trim())
+        Ok(buf.iter().map(|b| *b as char).collect::<String>().trim().to_string())
     }
 }
 

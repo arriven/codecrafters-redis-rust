@@ -1,5 +1,5 @@
 use std::io;
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::{TcpListener};
 use tokio::stream::StreamExt;
 
 mod redis;
@@ -9,22 +9,17 @@ async fn main() -> io::Result<()> {
     let mut listener = TcpListener::bind("127.0.0.1:6379").await?;
 
     let mut incoming = listener.incoming();
+    let server = redis::Server::new();
 
     while let Some(stream) = incoming.next().await {
         match stream {
             Ok(stream) => {
-                tokio::spawn(handle_connection(stream));
+                let stream = tokio::io::BufStream::new(stream);
+                let worker = server.worker(stream);
+                tokio::spawn(worker.run());
             }
             Err(e) => { eprintln!("{:?}", e); }
         }
     }
     Ok(())
-}
-
-async fn handle_connection(stream: TcpStream) -> Result<(), redis::Error> {
-    let stream = tokio::io::BufStream::new(stream);
-    let mut server = redis::Server::new(stream);
-    loop {
-        server.process_message().await?;
-    }
 }
