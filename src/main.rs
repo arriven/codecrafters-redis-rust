@@ -58,7 +58,7 @@ impl Value {
                 data.push(val);
             }
         } else {
-            panic!("only array types can be used appended with a value");
+            panic!("only array types can be appended with a value");
         }
     }
 
@@ -70,14 +70,14 @@ impl Value {
                     Value::String(command) => match command.to_lowercase().as_str() {
                         "ping" => Command::Ping,
                         "echo" => {
-                            if let Value::String(data) = data.pop().unwrap() {
+                            if let Some(Value::String(data)) = data.pop() {
                                 Command::Echo(data)
                             } else {
                                 Command::Error("ECHO: wrong argument type".to_owned())
                             }
                         },
                         "get" => {
-                            if let Value::String(name) = data.pop().unwrap() {
+                            if let Some(Value::String(name)) = data.pop() {
                                 Command::Get(name)
                             } else {
                                 Command::Error("GET: wrong argument type".to_owned())
@@ -209,36 +209,40 @@ impl<R> Processor<R> where R: tokio::prelude::AsyncRead + tokio::prelude::AsyncB
         let b = self.stream.read_u8().await?;
         match b as char {
             '*' => {
-                let mut buf = vec![];
-                self.stream.read_until(b'\n', &mut buf).await?;
-                let text = buf.iter().map(|b| *b as char).collect::<String>();
-                let size = text.trim().parse::<usize>().unwrap();
+                let size = self.read_num::<usize>().await?;
                 Ok(Value::Array(size, Vec::with_capacity(size)))
             }
             '$' => {
-                let mut buf = vec![];
-                self.stream.read_until(b'\n', &mut buf).await?;
-                let text = buf.iter().map(|b| *b as char).collect::<String>();
-                let size = text.trim().parse::<i64>().unwrap();
+                let size = self.read_num::<i64>().await?;
                 if size > 0 {
-                    let size = size as usize;
-                    let mut result = vec![0; size];
-                    self.stream.read_exact(&mut result).await?;
-                    let result = result.iter().map(|b| *b as char).collect::<String>();
-                    self.stream.read_until(b'\n', &mut buf).await?;
+                    let result = self.read_fixed_string(size as usize).await?;
                     Ok(Value::String(result))
                 } else {
                     Ok(Value::Nil)
                 }
             }
             ':' => {
-                let mut buf = vec![];
-                self.stream.read_until(b'\n', &mut buf).await?;
-                let result = buf.iter().map(|b| *b as char).collect::<String>().trim().parse::<i64>().unwrap();
+                let result = self.read_num::<i64>().await?;
                 Ok(Value::Int(result))
             }
             _ => Ok(Value::Nil)
         }
+    }
+
+    async fn read_num<T>(&mut self) -> io::Result<T> where T: std::str::FromStr, <T as std::str::FromStr>::Err : std::fmt::Debug {
+        let mut buf = vec![];
+        self.stream.read_until(b'\n', &mut buf).await?;
+        Ok(buf.iter().map(|b| *b as char).collect::<String>().trim().parse::<T>().unwrap())
+    }
+
+    async fn read_fixed_string(&mut self, size: usize) -> io::Result<String> {
+        let mut result = vec![0; size];
+        self.stream.read_exact(&mut result).await?;
+        let result = result.iter().map(|b| *b as char).collect::<String>();
+
+        let mut buf = vec![];
+        self.stream.read_until(b'\n', &mut buf).await?;
+        Ok(result)
     }
 }
 
