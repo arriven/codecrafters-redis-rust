@@ -172,8 +172,15 @@ pub struct Server {
 
 impl Server {
     pub fn new() -> Server {
+        let storage = Arc::new(Mutex::new(std::collections::HashMap::new()));
+        {
+            let storage = storage.clone();
+            tokio::spawn(async move {
+                Server::gc(storage).await;
+            });
+        }
         Server{
-            storage: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            storage,
         }
     }
 
@@ -181,6 +188,17 @@ impl Server {
         Worker{
             stream,
             storage: self.storage.clone(),
+        }
+    }
+
+    async fn gc(storage: Storage) {
+        loop {
+            storage.lock().await.retain(|_, ref mut v| {
+                if let Some(expiry) = v.expiry {
+                    return expiry < std::time::Instant::now();
+                }
+                true
+            });
         }
     }
 }
