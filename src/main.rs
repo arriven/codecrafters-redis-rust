@@ -21,7 +21,7 @@ async fn main() -> io::Result<()> {
     Ok(())
 }
 
-async fn handle_connection(stream: TcpStream) -> io::Result<()> {
+async fn handle_connection(stream: TcpStream) -> Result<(), redis::Error> {
     let stream = tokio::io::BufStream::new(stream);
     let mut server = redis::Server::new(stream);
     loop {

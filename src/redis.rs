@@ -1,6 +1,18 @@
 use std::io;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, AsyncBufReadExt};
 
+#[derive(Debug)]
+pub enum Error {
+    Io(std::io::Error),
+    Argument(String),
+}
+
+impl From<std::io::Error> for Error {
+    fn from(e: std::io::Error) -> Self {
+        Self::Io(e)
+    }
+}
+
 enum Value {
     Nil,
     Int(i64),
@@ -31,17 +43,17 @@ impl Value {
         }
     }
 
-    fn into_command(self) -> Command {
+    fn to_string(&self) -> String {
         match self {
-            Value::Array(_, data) => Command::from_array(data),
-            Value::String(data) => Command::from_string(&data),
-            _ => Command::Error("wrong argument type".to_owned()),
+            Value::Array(size, data) => format!("*{}{}\r\n", size, data.iter().map(|v| v.to_string()).collect::<Vec<_>>().join("")),
+            Value::String(data) => format!("${}\r\n{}\r\n", data.as_bytes().len(), data),
+            Value::Int(n) => format!(":{}\r\n", n),
+            Value::Nil => "$-1\r\n".to_string(),
         }
     }
 }
 
 enum Command {
-    Error(String),
     Ping,
     Echo(String),
     Get(String),
@@ -49,49 +61,57 @@ enum Command {
 }
 
 impl Command {
-    fn from_string(data: &str) -> Command {
-        match data.to_lowercase().as_str() {
-            "ping" => Command::Ping,
-            _ => Command::Error(format!("not implemented: {}", data)),
+    fn from_value(value: Value) -> Result<Command, Error> {
+        match value {
+            Value::Array(_, data) => Command::from_array(data),
+            Value::String(data) => Command::from_string(&data),
+            _ => Err(Error::Argument("wrong argument type".to_owned())),
         }
     }
 
-    fn from_array(data: Vec<Value>) -> Command {
+    fn from_string(data: &str) -> Result<Command, Error> {
+        match data.to_lowercase().as_str() {
+            "ping" => Ok(Command::Ping),
+            _ => Err(Error::Argument(format!("not implemented: {}", data))),
+        }
+    }
+
+    fn from_array(data: Vec<Value>) -> Result<Command, Error> {
         if data.is_empty() {
-            return Command::Error("empty command".to_owned());
+            return Err(Error::Argument("empty command".to_owned()));
         }
 
         match &data[0] {
             Value::String(command) => match command.to_lowercase().as_str() {
-                "ping" => Command::Ping,
+                "ping" => Ok(Command::Ping),
                 "echo" => Command::echo(data),
                 "get" => Command::get(data),
                 "set" => Command::set(data, None),
-                _ => Command::Error(format!("not implemented: {}", command)),
+                _ => Err(Error::Argument(format!("not implemented: {}", command))),
             },
-            _ => Command::Error("wrong argument type".to_owned()),
+            _ => Err(Error::Argument("wrong argument type".to_owned())),
         }
     }
 
-    fn echo(mut data: Vec<Value>) -> Command {
+    fn echo(mut data: Vec<Value>) -> Result<Command, Error> {
         if let Some(Value::String(data)) = data.pop() {
-            Command::Echo(data)
+            Ok(Command::Echo(data))
         } else {
-            Command::Error("ECHO: wrong argument type".to_owned())
+            Err(Error::Argument("ECHO: wrong argument type".to_owned()))
         }
     }
 
-    fn get(mut data: Vec<Value>) -> Command {
+    fn get(mut data: Vec<Value>) -> Result<Command, Error> {
         if let Some(Value::String(data)) = data.pop() {
-            Command::Get(data)
+            Ok(Command::Get(data))
         } else {
-            Command::Error("GET: wrong argument type".to_owned())
+            Err(Error::Argument("GET: wrong argument type".to_owned()))
         }
     }
 
-    fn set(mut data: Vec<Value>, expiry: Option<std::time::Instant>) -> Command {
+    fn set(mut data: Vec<Value>, expiry: Option<std::time::Instant>) -> Result<Command, Error> {
         if data.len() < 3 {
-            return Command::Error(format!{"not enough arguments for set: {}", data.len()})
+            return Err(Error::Argument(format!{"not enough arguments for set: {}", data.len()}))
         }
         if data.len() > 3 {
             return Command::set_with_flags(data)
@@ -99,13 +119,13 @@ impl Command {
 
         let value = data.pop().unwrap();
         if let Value::String(name) = data.pop().unwrap() {
-            Command::Set(name, value, expiry)
+            Ok(Command::Set(name, value, expiry))
         } else {
-            Command::Error("SET: wrong argument type".to_owned())
+            Err(Error::Argument("SET: wrong argument type".to_owned()))
         }
     }
 
-    fn set_with_flags(mut data: Vec<Value>) -> Command {
+    fn set_with_flags(mut data: Vec<Value>) -> Result<Command, Error> {
         let arg = data.pop().unwrap();
         if let Value::String(flag) = data.pop().unwrap() {
             match flag.to_lowercase().as_str() {
@@ -115,15 +135,15 @@ impl Command {
                     } else if let Value::String(duration) = arg {
                         duration.parse::<u64>().unwrap()
                     } else {
-                        return Command::Error("SET: wrong argument type".to_owned());
+                        return Err(Error::Argument("SET: wrong argument type".to_owned()));
                     };
                     let expiry = std::time::Instant::now() + std::time::Duration::from_millis(duration as u64);
                     Command::set(data, Some(expiry))
                 },
-                _ => Command::Error(format!("SET: flag not implemented: {}", flag))
+                _ => Err(Error::Argument(format!("SET: flag not implemented: {}", flag)))
             }
         } else {
-            Command::Error("SET: wrong argument type".to_owned())
+            Err(Error::Argument("SET: wrong argument type".to_owned()))
         }
     }
 }
@@ -146,46 +166,38 @@ impl<R> Server<R> where R: tokio::prelude::AsyncRead + tokio::prelude::AsyncBufR
         }
     }
 
-    pub async fn process_message(&mut self)-> io::Result<()> {
+    pub async fn process_message(&mut self)-> Result<(), Error> {
         let message = self.read_message().await?;
-        let command = message.into_command();
+        let command = Command::from_value(message)?;
         match command {
-            Command::Ping => {
-                self.send_response("$4\r\nPONG\r\n").await?;
-            }
-            Command::Echo(data) => {
-                self.send_response(&format!("+{}\r\n", data)).await?;
-            }
+            Command::Ping => self.send_response(&Value::String("PONG".to_string()).to_string()).await,
+            Command::Echo(data) => self.send_response(&Value::String(data).to_string()).await,
             Command::Get(name) => {
-                if let Some(StoredValue{value: Value::String(value), expiry}) = self.storage.get(&name) {
+                if let Some(StoredValue{value, expiry}) = self.storage.get(&name) {
                     if let Some(expiry) = expiry {
                         if *expiry < std::time::Instant::now() {
-                            return self.send_response("$-1\r\n").await;
+                            return self.send_response(&Value::Nil.to_string()).await;
                         }
                     }
-                    let response = format!("+{}\r\n", value);
+                    let response = value.to_string();
                     return self.send_response(&response).await;
                 }
-                self.send_response("$-1\r\n").await?;
+                self.send_response(&Value::Nil.to_string()).await
             }
             Command::Set(name, value, expiry) => {
                 self.storage.insert(name, StoredValue{value, expiry});
-                self.send_response("+OK\r\n").await?;
-            }
-            Command::Error(cause) => {
-                eprintln!("{}", cause);
+                self.send_response(&Value::String("OK".to_string()).to_string()).await
             }
         }
-        Ok(())
     }
 
-    async fn send_response(&mut self, response: &str) -> io::Result<()> {
+    async fn send_response(&mut self, response: &str) -> Result<(), Error> {
         self.stream.write_all(response.as_bytes()).await?;
         self.stream.flush().await?;
         Ok(())
     }
 
-    async fn read_message(&mut self) -> io::Result<Value> {
+    async fn read_message(&mut self) -> Result<Value, Error> {
         let mut message = self.read_single().await?;
         while !message.is_complete() {
             let next = self.read_single().await?;
@@ -194,7 +206,7 @@ impl<R> Server<R> where R: tokio::prelude::AsyncRead + tokio::prelude::AsyncBufR
         Ok(message)
     }
 
-    async fn read_single(&mut self) -> io::Result<Value> {
+    async fn read_single(&mut self) -> Result<Value, Error> {
         let b = self.stream.read_u8().await?;
         match b as char {
             '*' => {
