@@ -1,15 +1,23 @@
 use std::io;
+use std::convert::TryInto;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, AsyncBufReadExt};
 
 #[derive(Debug)]
 pub enum Error {
     Io(std::io::Error),
     Argument(String),
+    TryFromInt(std::num::TryFromIntError),
 }
 
 impl From<std::io::Error> for Error {
     fn from(e: std::io::Error) -> Self {
         Self::Io(e)
+    }
+}
+
+impl From<std::num::TryFromIntError> for Error {
+    fn from(e: std::num::TryFromIntError) -> Self {
+        Self::TryFromInt(e)
     }
 }
 
@@ -42,13 +50,15 @@ impl Value {
             panic!("only array types can be appended with a value");
         }
     }
+}
 
-    fn to_string(&self) -> String {
+impl std::fmt::Display for Value {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
-            Value::Array(size, data) => format!("*{}{}\r\n", size, data.iter().map(|v| v.to_string()).collect::<Vec<_>>().join("")),
-            Value::String(data) => format!("${}\r\n{}\r\n", data.as_bytes().len(), data),
-            Value::Int(n) => format!(":{}\r\n", n),
-            Value::Nil => "$-1\r\n".to_string(),
+            Value::Array(size, data) => write!(f, "*{}{}\r\n", size, data.iter().map(std::string::ToString::to_string).collect::<String>()),
+            Value::String(data) => write!(f, "${}\r\n{}\r\n", data.as_bytes().len(), data),
+            Value::Int(n) => write!(f, ":{}\r\n", n),
+            Value::Nil => write!(f, "$-1\r\n"),
         }
     }
 }
@@ -131,13 +141,13 @@ impl Command {
             match flag.to_lowercase().as_str() {
                 "px" => {
                     let duration = if let Value::Int(duration) = arg {
-                        duration as u64
+                        duration.try_into()?
                     } else if let Value::String(duration) = arg {
                         duration.parse::<u64>().unwrap()
                     } else {
                         return Err(Error::Argument("SET: wrong argument type".to_owned()));
                     };
-                    let expiry = std::time::Instant::now() + std::time::Duration::from_millis(duration as u64);
+                    let expiry = std::time::Instant::now() + std::time::Duration::from_millis(duration);
                     Command::set(data, Some(expiry))
                 },
                 _ => Err(Error::Argument(format!("SET: flag not implemented: {}", flag)))
@@ -216,7 +226,7 @@ impl<R> Server<R> where R: tokio::prelude::AsyncRead + tokio::prelude::AsyncBufR
             '$' => {
                 let size = self.read_num::<i64>().await?;
                 if size > 0 {
-                    let result = self.read_fixed_string(size as usize).await?;
+                    let result = self.read_fixed_string(size.try_into()?).await?;
                     Ok(Value::String(result))
                 } else {
                     Ok(Value::Nil)
