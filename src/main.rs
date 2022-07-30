@@ -138,7 +138,7 @@ impl Command {
                     let expiry = std::time::Instant::now() + std::time::Duration::from_millis(duration as u64);
                     Command::set_core(data, Some(expiry))
                 },
-                _ => Command::Error(format!("SET: flag not implemented: {flag}"))
+                _ => Command::Error(format!("SET: flag not implemented: {}", flag))
             }
         } else {
             Command::Error("SET: wrong argument type".to_owned())
