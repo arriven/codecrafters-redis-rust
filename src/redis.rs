@@ -195,7 +195,7 @@ impl Server {
         loop {
             storage.lock().await.retain(|_, ref mut v| {
                 if let Some(expiry) = v.expiry {
-                    return expiry < std::time::Instant::now();
+                    return expiry >= std::time::Instant::now();
                 }
                 true
             });
