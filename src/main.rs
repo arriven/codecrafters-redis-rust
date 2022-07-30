@@ -38,12 +38,8 @@ enum Value {
 impl Value {
     fn is_complete(&self) -> bool {
         match &self {
-            Value::Array(size, data) => if *size == data.len() {
-                data.iter().all(Value::is_complete)
-            } else {
-                false
-            }
-            _ => true
+            Value::Array(size, data) => *size == data.len() && data.iter().all(Value::is_complete),
+            _ => true,
         }
     }
 
@@ -64,69 +60,8 @@ impl Value {
 
     fn into_command(self) -> Command {
         match self {
-            Value::Array(_, mut data) => {
-                assert!(!data.is_empty());
-                match &data[0] {
-                    Value::String(command) => match command.to_lowercase().as_str() {
-                        "ping" => Command::Ping,
-                        "echo" => {
-                            if let Some(Value::String(data)) = data.pop() {
-                                Command::Echo(data)
-                            } else {
-                                Command::Error("ECHO: wrong argument type".to_owned())
-                            }
-                        },
-                        "get" => {
-                            if let Some(Value::String(name)) = data.pop() {
-                                Command::Get(name)
-                            } else {
-                                Command::Error("GET: wrong argument type".to_owned())
-                            }
-                        }
-                        "set" => {
-                            if data.len() == 3 {
-                                let value = data.pop().unwrap();
-                                if let Value::String(name) = data.pop().unwrap() {
-                                    Command::Set(name, value, None)
-                                } else {
-                                    Command::Error("SET: wrong argument type".to_owned())
-                                }
-                            } else if data.len() == 5 {
-                                let duration = data.pop().unwrap();
-                                let duration = if let Value::Int(duration) = duration {
-                                    duration as u64
-                                } else if let Value::String(duration) = duration {
-                                    duration.parse::<u64>().unwrap()
-                                } else {
-                                    return Command::Error("SET: wrong argument type".to_owned());
-                                };
-                                if let Value::String(flag) = data.pop().unwrap() {
-                                    assert!(flag.to_lowercase().as_str() == "px");
-                                    let value = data.pop().unwrap();
-                                    if let Value::String(name) = data.pop().unwrap() {
-                                        let expiry = std::time::Instant::now() + std::time::Duration::from_millis(duration as u64);
-                                        Command::Set(name, value, Some(expiry))
-                                    } else {
-                                        Command::Error("SET: wrong argument type".to_owned())
-                                    }
-                                } else {
-                                    Command::Error("SET: wrong argument type".to_owned())
-                                }
-                            } else {
-                                Command::Error(format!{"wrong number of arguments for set: {}", data.len()})
-                            }
-                        },
-                        _ => Command::Error(format!("not implemented: {}", command)),
-                    },
-                    _ => Command::Error("wrong argument type".to_owned()),
-                }
-            },
-            Value::String(data) => {
-                match data.to_lowercase().as_str() {
-                    "ping" => Command::Ping,
-                    _ => Command::Error(format!("not implemented: {}", data)),
-                }
-            },
+            Value::Array(_, data) => Command::from_array(data),
+            Value::String(data) => Command::from_string(&data),
             _ => Command::Error("wrong argument type".to_owned()),
         }
     }
@@ -138,6 +73,86 @@ enum Command {
     Echo(String),
     Get(String),
     Set(String, Value, Option<std::time::Instant>),
+}
+
+impl Command {
+    fn from_string(data: &str) -> Command {
+        match data.to_lowercase().as_str() {
+            "ping" => Command::Ping,
+            _ => Command::Error(format!("not implemented: {}", data)),
+        }
+    }
+
+    fn from_array(data: Vec<Value>) -> Command {
+        assert!(!data.is_empty());
+        match &data[0] {
+            Value::String(command) => match command.to_lowercase().as_str() {
+                "ping" => Command::Ping,
+                "echo" => Command::echo(data),
+                "get" => Command::get(data),
+                "set" => Command::set(data),
+                _ => Command::Error(format!("not implemented: {}", command)),
+            },
+            _ => Command::Error("wrong argument type".to_owned()),
+        }
+    }
+
+    fn echo(mut data: Vec<Value>) -> Command {
+        if let Some(Value::String(data)) = data.pop() {
+            Command::Echo(data)
+        } else {
+            Command::Error("ECHO: wrong argument type".to_owned())
+        }
+    }
+
+    fn get(mut data: Vec<Value>) -> Command {
+        if let Some(Value::String(data)) = data.pop() {
+            Command::Get(data)
+        } else {
+            Command::Error("GET: wrong argument type".to_owned())
+        }
+    }
+
+    fn set(data: Vec<Value>) -> Command {
+        if data.len() == 3 {
+            Command::set_core(data, None)
+        } else if data.len() == 5 {
+            Command::set_with_flags(data)
+        } else {
+            Command::Error(format!{"wrong number of arguments for set: {}", data.len()})
+        }
+    }
+
+    fn set_with_flags(mut data: Vec<Value>) -> Command {
+        let arg = data.pop().unwrap();
+        if let Value::String(flag) = data.pop().unwrap() {
+            match flag.to_lowercase().as_str() {
+                "px" => {
+                    let duration = if let Value::Int(duration) = arg {
+                        duration as u64
+                    } else if let Value::String(duration) = arg {
+                        duration.parse::<u64>().unwrap()
+                    } else {
+                        return Command::Error("SET: wrong argument type".to_owned());
+                    };
+                    let expiry = std::time::Instant::now() + std::time::Duration::from_millis(duration as u64);
+                    Command::set_core(data, Some(expiry))
+                },
+                _ => Command::Error(format!("SET: flag not implemented: {flag}"))
+            }
+        } else {
+            Command::Error("SET: wrong argument type".to_owned())
+        }
+    }
+
+    fn set_core(mut data: Vec<Value>, expiry: Option<std::time::Instant>) -> Command {
+        let value = data.pop().unwrap();
+        if let Value::String(name) = data.pop().unwrap() {
+            Command::Set(name, value, expiry)
+        } else {
+            Command::Error("SET: wrong argument type".to_owned())
+        }
+    }
 }
 
 struct StoredValue {
