@@ -1,8 +1,8 @@
-use std::io;
 use std::convert::TryInto;
+use std::io;
 use std::sync::Arc;
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
 use tokio::sync::Mutex;
-use tokio::io::{AsyncReadExt, AsyncWriteExt, AsyncBufReadExt};
 
 #[derive(Debug)]
 pub enum Error {
@@ -28,7 +28,7 @@ enum Value {
     Nil,
     Int(i64),
     String(String),
-    Array(usize, Vec<Value>)
+    Array(usize, Vec<Value>),
 }
 
 impl Value {
@@ -58,7 +58,14 @@ impl Value {
 impl std::fmt::Display for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
-            Value::Array(size, data) => write!(f, "*{}{}\r\n", size, data.iter().map(std::string::ToString::to_string).collect::<String>()),
+            Value::Array(size, data) => write!(
+                f,
+                "*{}{}\r\n",
+                size,
+                data.iter()
+                    .map(std::string::ToString::to_string)
+                    .collect::<String>()
+            ),
             Value::String(data) => write!(f, "${}\r\n{}\r\n", data.as_bytes().len(), data),
             Value::Int(n) => write!(f, ":{}\r\n", n),
             Value::Nil => write!(f, "$-1\r\n"),
@@ -124,10 +131,12 @@ impl Command {
 
     fn set(mut data: Vec<Value>, expiry: Option<std::time::Instant>) -> Result<Command, Error> {
         if data.len() < 3 {
-            return Err(Error::Argument(format!{"not enough arguments for set: {}", data.len()}))
+            return Err(Error::Argument(
+                format! {"not enough arguments for set: {}", data.len()},
+            ));
         }
         if data.len() > 3 {
-            return Command::set_with_flags(data)
+            return Command::set_with_flags(data);
         }
 
         let value = data.pop().unwrap();
@@ -150,10 +159,14 @@ impl Command {
                     } else {
                         return Err(Error::Argument("SET: wrong argument type".to_owned()));
                     };
-                    let expiry = std::time::Instant::now() + std::time::Duration::from_millis(duration);
+                    let expiry =
+                        std::time::Instant::now() + std::time::Duration::from_millis(duration);
                     Command::set(data, Some(expiry))
-                },
-                _ => Err(Error::Argument(format!("SET: flag not implemented: {}", flag)))
+                }
+                _ => Err(Error::Argument(format!(
+                    "SET: flag not implemented: {}",
+                    flag
+                ))),
             }
         } else {
             Err(Error::Argument("SET: wrong argument type".to_owned()))
@@ -188,13 +201,17 @@ impl Server {
                 Server::gc(storage).await;
             });
         }
-        Server{
-            storage,
-        }
+        Server { storage }
     }
 
-    pub fn worker<R>(&self, stream: R) -> Worker<R> where R: tokio::prelude::AsyncRead + tokio::prelude::AsyncBufRead + tokio::prelude::AsyncWrite + std::marker::Unpin {
-        Worker{
+    pub fn worker<R>(&self, stream: R) -> Worker<R>
+    where
+        R: tokio::prelude::AsyncRead
+            + tokio::prelude::AsyncBufRead
+            + tokio::prelude::AsyncWrite
+            + std::marker::Unpin,
+    {
+        Worker {
             stream,
             storage: self.storage.clone(),
         }
@@ -209,12 +226,24 @@ impl Server {
 
 type Storage = Arc<Mutex<std::collections::HashMap<String, StoredValue>>>;
 
-pub struct Worker<R> where R: tokio::prelude::AsyncRead + tokio::prelude::AsyncBufRead + tokio::prelude::AsyncWrite + std::marker::Unpin {
+pub struct Worker<R>
+where
+    R: tokio::prelude::AsyncRead
+        + tokio::prelude::AsyncBufRead
+        + tokio::prelude::AsyncWrite
+        + std::marker::Unpin,
+{
     stream: R,
     storage: Storage,
 }
 
-impl<R> Worker<R> where R: tokio::prelude::AsyncRead + tokio::prelude::AsyncBufRead + tokio::prelude::AsyncWrite + std::marker::Unpin {
+impl<R> Worker<R>
+where
+    R: tokio::prelude::AsyncRead
+        + tokio::prelude::AsyncBufRead
+        + tokio::prelude::AsyncWrite
+        + std::marker::Unpin,
+{
     pub async fn run(mut self) -> Result<(), Error> {
         loop {
             self.process_message().await?;
@@ -229,10 +258,14 @@ impl<R> Worker<R> where R: tokio::prelude::AsyncRead + tokio::prelude::AsyncBufR
             Command::Echo(data) => Value::String(data),
             Command::Get(name) => self.get_value(&name).await,
             Command::Set(name, value, expiry) => {
-                self.storage.lock().await.insert(name, StoredValue{value, expiry});
+                self.storage
+                    .lock()
+                    .await
+                    .insert(name, StoredValue { value, expiry });
                 Value::String("OK".to_string())
             }
-        }.to_string();
+        }
+        .to_string();
         self.send_response(&response).await
     }
 
@@ -241,7 +274,7 @@ impl<R> Worker<R> where R: tokio::prelude::AsyncRead + tokio::prelude::AsyncBufR
             if value.expired() {
                 return Value::Nil;
             }
-            return value.value.clone()
+            return value.value.clone();
         }
         Value::Nil
     }
@@ -285,14 +318,24 @@ impl<R> Worker<R> where R: tokio::prelude::AsyncRead + tokio::prelude::AsyncBufR
                 let result = self.read_simple_string().await?;
                 Ok(Value::String(result))
             }
-            _ => Ok(Value::Nil)
+            _ => Ok(Value::Nil),
         }
     }
 
-    async fn read_num<T>(&mut self) -> io::Result<T> where T: std::str::FromStr, <T as std::str::FromStr>::Err : std::fmt::Debug {
+    async fn read_num<T>(&mut self) -> io::Result<T>
+    where
+        T: std::str::FromStr,
+        <T as std::str::FromStr>::Err: std::fmt::Debug,
+    {
         let mut buf = vec![];
         self.stream.read_until(b'\n', &mut buf).await?;
-        Ok(buf.iter().map(|b| *b as char).collect::<String>().trim().parse::<T>().unwrap())
+        Ok(buf
+            .iter()
+            .map(|b| *b as char)
+            .collect::<String>()
+            .trim()
+            .parse::<T>()
+            .unwrap())
     }
 
     async fn read_fixed_string(&mut self, size: usize) -> io::Result<String> {
@@ -308,7 +351,11 @@ impl<R> Worker<R> where R: tokio::prelude::AsyncRead + tokio::prelude::AsyncBufR
     async fn read_simple_string(&mut self) -> io::Result<String> {
         let mut buf = vec![];
         self.stream.read_until(b'\n', &mut buf).await?;
-        Ok(buf.iter().map(|b| *b as char).collect::<String>().trim().to_string())
+        Ok(buf
+            .iter()
+            .map(|b| *b as char)
+            .collect::<String>()
+            .trim()
+            .to_string())
     }
 }
-

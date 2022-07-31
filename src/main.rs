@@ -1,5 +1,5 @@
 use std::io;
-use tokio::net::{TcpListener};
+use tokio::net::TcpListener;
 use tokio::stream::StreamExt;
 
 mod redis;
@@ -18,7 +18,9 @@ async fn main() -> io::Result<()> {
                 let worker = server.worker(stream);
                 tokio::spawn(worker.run());
             }
-            Err(e) => { eprintln!("{:?}", e); }
+            Err(e) => {
+                eprintln!("{:?}", e);
+            }
         }
     }
     Ok(())
